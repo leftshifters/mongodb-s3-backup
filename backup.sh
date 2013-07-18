@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Argument = -u user -p password -k key -s secret -b bucket
+# Argument = -u user -p password -d database -k key -s secret -b bucket
 #
 # To Do - Add logging of output.
 # To Do - Abstract bucket region to options
@@ -17,35 +17,40 @@ usage: $0 options
 This script dumps the current mongo database, tars it, then sends it to an Amazon S3 bucket.
 
 OPTIONS:
-   -h      Show this message
-   -u      Mongodb user
-   -p      Mongodb password
-   -k      AWS Access Key
-   -s      AWS Secret Key
-   -r      Amazon S3 region
-   -b      Amazon S3 bucket name
+   -h     Show this help message
+   -u     Mongodb user
+   -p     Mongodb password
+   -d     Database name
+   -k     AWS Access Key
+   -s     AWS Secret Key
+   -r     Amazon S3 region
+   -b     Amazon S3 bucket name
 EOF
 }
 
 MONGODB_USER=
 MONGODB_PASSWORD=
+MONGODB_DATABASE=
 AWS_ACCESS_KEY=
 AWS_SECRET_KEY=
 S3_REGION=
 S3_BUCKET=
 
-while getopts “ht:u:p:k:s:r:b:” OPTION
+while getopts “ht:u:p:d:k:s:r:b:” OPTION
 do
   case $OPTION in
     h)
       usage
       exit 1
       ;;
-    u)
-      MONGODB_USER=$OPTARG
-      ;;
-    p)
-      MONGODB_PASSWORD=$OPTARG
+    # u)
+    #   MONGODB_USER=$OPTARG
+    #   ;;
+    # p)
+    #   MONGODB_PASSWORD=$OPTARG
+    #   ;;
+    d)
+      MONGODB_DATABASE=$OPTARG
       ;;
     k)
       AWS_ACCESS_KEY=$OPTARG
@@ -60,13 +65,13 @@ do
       S3_BUCKET=$OPTARG
       ;;
     ?)
-      usage
       exit
     ;;
   esac
 done
 
-if [[ -z $MONGODB_USER ]] || [[ -z $MONGODB_PASSWORD ]] || [[ -z $AWS_ACCESS_KEY ]] || [[ -z $AWS_SECRET_KEY ]] || [[ -z $S3_REGION ]] || [[ -z $S3_BUCKET ]]
+#if [[ -z $MONGODB_USER ]] || [[ -z $MONGODB_PASSWORD ]] || [[ -z $AWS_ACCESS_KEY ]] || [[ -z $AWS_SECRET_KEY ]] || [[ -z $S3_REGION ]] || [[ -z $S3_BUCKET ]]
+if [[ -z $AWS_ACCESS_KEY ]] || [[ -z $AWS_SECRET_KEY ]] || [[ -z $S3_REGION ]] || [[ -z $S3_BUCKET ]]
 then
   usage
   exit 1
@@ -82,13 +87,17 @@ ARCHIVE_NAME="$FILE_NAME.tar.gz"
 
 # Lock the database
 # Note there is a bug in mongo 2.2.0 where you must touch all the databases before you run mongodump
-mongo -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" admin --eval "var databaseNames = db.getMongo().getDBNames(); for (var i in databaseNames) { printjson(db.getSiblingDB(databaseNames[i]).getCollectionNames()) }; printjson(db.fsyncLock());"
+#mongo -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" admin --eval "var databaseNames = db.getMongo().getDBNames(); for (var i in databaseNames) { printjson(db.getSiblingDB(databaseNames[i]).getCollectionNames()) }; printjson(db.fsyncLock());"
+# mongo admin --eval "var databaseNames = db.getMongo().getDBNames(); for (var i in databaseNames) { printjson(db.getSiblingDB(databaseNames[i]).getCollectionNames()) }; printjson(db.fsyncLock());"
+mongo $MONGODB_DATABASE --eval "db.fsyncLock();"
 
 # Dump the database
-mongodump -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" --out $DIR/backup/$FILE_NAME
+#mongodump -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" --out $DIR/backup/$FILE_NAME
+mongodump --out $DIR/backup/$FILE_NAME
 
 # Unlock the database
-mongo -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" admin --eval "printjson(db.fsyncUnlock());"
+#mongo -username "$MONGODB_USER" -password "$MONGODB_PASSWORD" admin --eval "printjson(db.fsyncUnlock());"
+mongo $MONGODB_DATABASE --eval "printjson(db.fsyncUnlock());"
 
 # Tar Gzip the file
 tar -C $DIR/backup/ -zcvf $DIR/backup/$ARCHIVE_NAME $FILE_NAME/
@@ -105,10 +114,11 @@ STRING_TO_SIGN="PUT\n$CONTENT_MD5\n$CONTENT_TYPE\n$HEADER_DATE\n/$S3_BUCKET/$ARC
 SIGNATURE=$(echo -e -n $STRING_TO_SIGN | openssl dgst -sha1 -binary -hmac $AWS_SECRET_KEY | openssl enc -base64)
 
 curl -X PUT \
---header "Host: $S3_BUCKET.s3-$S3_REGION.amazonaws.com" \
+--header "Host: $S3_BUCKET" \
 --header "Date: $HEADER_DATE" \
 --header "content-type: $CONTENT_TYPE" \
 --header "Content-MD5: $CONTENT_MD5" \
 --header "Authorization: AWS $AWS_ACCESS_KEY:$SIGNATURE" \
 --upload-file $DIR/backup/$ARCHIVE_NAME \
-https://$S3_BUCKET.s3-$S3_REGION.amazonaws.com/$ARCHIVE_NAME
+https://s3.amazonaws.com/$S3_BUCKET/$ARCHIVE_NAME
+#https://$S3_BUCKET.s3-$S3_REGION.amazonaws.com/$ARCHIVE_NAME
